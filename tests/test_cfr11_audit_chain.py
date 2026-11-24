@@ -38,9 +38,11 @@ def test_chain_verifies_and_links(tmp_path):
     e2 = c.record_event(None, "t1", "alice", "revise", "case-1", 2, {"summary": "s2"})
     e3 = c.record_event(None, "t2", "bob", "create", "case-2", 1, {"summary": "s3"})
 
+    # The chain is global: tenant-filtered verification would break links
+    # whenever events from different tenants are interleaved.
     report = c.verify_chain("t1")
     assert report["ok"] is True
-    assert report["events_checked"] == 2
+    assert report["events_checked"] == 3
     assert report["genesis"] == GENESIS
     assert report["decryption_ok"] is True
 
