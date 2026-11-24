@@ -351,10 +351,28 @@ def create_application(store: Optional[CaseStore] = None) -> FastAPI:
         tenant: str = Query(...),
         user: dict = Depends(current_user),
     ):
-        _require_role(request, user, "reader", tenant)
+        purpose_roles = {
+            "case_review": "reviewer",
+            "case_approval": "approver",
+        }
+        required_role = purpose_roles.get(req.purpose)
+        if required_role is None:
+            raise HTTPException(status_code=400, detail="unsupported e-signature purpose")
+        _require_role(request, user, required_role, tenant)
+        if not req.case_id or req.version is None:
+            raise HTTPException(
+                status_code=422,
+                detail="case_id and version are required for an electronic signature",
+            )
         compliance: CFR11Compliance = request.app.state.cfr11
         if compliance is None or not compliance.enabled:
             raise HTTPException(status_code=404, detail="CFR 11 not enabled")
+        try:
+            case = store.get(tenant, req.case_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="case not found")
+        if req.version > case["version"]:
+            raise HTTPException(status_code=409, detail="signature version does not exist")
         try:
             return compliance.create_e_signature(
                 tenant, user["user_id"], req.purpose, req.payload, req.case_id, req.version
