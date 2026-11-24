@@ -322,22 +322,19 @@ class CFR11Compliance:
         return _append(db)
 
     def verify_chain(self, tenant: Optional[str] = None) -> dict:
-        """Recompute the whole chain and validate every signature.
+        """Verify the single global append-only chain.
 
-        Returns {"ok": bool, "events_checked": int, "tampered": [seq,...],
-        "genesis": str, "decryption_ok": bool}.
+        The tenant argument is retained for backwards compatibility but is
+        intentionally not used: each event's previous digest links to the
+        immediately preceding event across all tenants. Filtering rows by
+        tenant would create false integrity failures and could miss gaps.
+        Callers must authorize access before invoking this method. The result
+        contains integrity metadata only, never another tenant's event body.
         """
         with _connect(self.db_path) as db:
-            rows = (
-                db.execute(
-                    "SELECT * FROM cfr11_audit_events WHERE tenant=? ORDER BY seq",
-                    (tenant,),
-                ).fetchall()
-                if tenant
-                else db.execute(
-                    "SELECT * FROM cfr11_audit_events ORDER BY seq"
-                ).fetchall()
-            )
+            rows = db.execute(
+                "SELECT * FROM cfr11_audit_events ORDER BY seq"
+            ).fetchall()
 
         tampered: list[dict] = []
         previous = GENESIS
