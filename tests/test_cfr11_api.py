@@ -121,25 +121,73 @@ def test_audit_trail_and_verify(tmp_path, monkeypatch):
     assert r.json()["ok"] is True
 
 
-def test_e_signature_endpoints(tmp_path, monkeypatch):
+def test_e_signature_endpoints_enforce_action_roles_and_case_binding(tmp_path, monkeypatch):
     client, _ = _app(tmp_path, monkeypatch)
-    r = client.post("/v1/cfr11/e-sign", params={"tenant": "t"}, headers=_headers("alice"),
-                    json={"purpose": "case_approval",
-                          "payload": {"decision": "approve"},
-                          "case_id": "case-1", "version": 1})
-    assert r.status_code == 200, r.text
-    sig_id = r.json()["id"]
+    created = client.post(
+        "/v1/cases", params={"tenant": "t"}, headers=_headers("alice"),
+        json={"body": {"summary": "signature target", "source_refs": []}},
+    )
+    assert created.status_code == 201, created.text
+    case = created.json()
+    params = {"tenant": "t"}
+    payload = {
+        "purpose": "case_review",
+        "payload": {"decision": "reviewed"},
+        "case_id": case["id"],
+        "version": case["version"],
+    }
 
-    r = client.get("/v1/cfr11/e-sign/{}/verify".format(sig_id), headers=_headers("eve"))
-    assert r.status_code == 200
-    assert r.json()["valid"] is True
+    # A reader/editor cannot sign a regulated review action.
+    denied = client.post("/v1/cfr11/e-sign", params=params, headers=_headers("alice"), json=payload)
+    assert denied.status_code == 403
 
-    # Reuse of same binding is rejected.
-    r = client.post("/v1/cfr11/e-sign", params={"tenant": "t"}, headers=_headers("alice"),
-                    json={"purpose": "case_approval",
-                          "payload": {"decision": "approve"},
-                          "case_id": "case-1", "version": 1})
-    assert r.status_code == 409
+    # The reviewer may sign the review action.
+    signed = client.post("/v1/cfr11/e-sign", params=params, headers=_headers("bob"), json=payload)
+    assert signed.status_code == 200, signed.text
+    sig_id = signed.json()["id"]
+
+    verified = client.get("/v1/cfr11/e-sign/{}/verify".format(sig_id), headers=_headers("eve"))
+    assert verified.status_code == 200
+    assert verified.json()["valid"] is True
+
+    # The same user cannot reuse the same signature binding.
+    duplicate = client.post("/v1/cfr11/e-sign", params=params, headers=_headers("bob"), json=payload)
+    assert duplicate.status_code == 409
+
+    # Approval signatures require an approver, not merely a reviewer.
+    approval_payload = {
+        "purpose": "case_approval",
+        "payload": {"decision": "approved"},
+        "case_id": case["id"],
+        "version": case["version"],
+    }
+    approval = client.post(
+        "/v1/cfr11/e-sign", params=params, headers=_headers("carol"), json=approval_payload
+    )
+    assert approval.status_code == 200, approval.text
+
+    unsupported = client.post(
+        "/v1/cfr11/e-sign", params=params, headers=_headers("bob"),
+        json={**payload, "purpose": "arbitrary_admin_action"},
+    )
+    assert unsupported.status_code == 400
+
+    missing_binding = client.post(
+        "/v1/cfr11/e-sign", params=params, headers=_headers("bob"),
+        json={"purpose": "case_review", "payload": {"decision": "reviewed"}},
+    )
+    assert missing_binding.status_code == 422
+
+
+def test_audit_chain_verifies_interleaved_tenants_globally(tmp_path, monkeypatch):
+    _, cfr11 = _app(tmp_path, monkeypatch)
+    cfr11.record_event(None, "tenant-a", "alice", "created", body={"id": "a1"})
+    cfr11.record_event(None, "tenant-b", "bob", "created", body={"id": "b1"})
+    cfr11.record_event(None, "tenant-a", "alice", "reviewed", body={"id": "a2"})
+
+    report = cfr11.verify_chain("tenant-a")
+    assert report["ok"] is True
+    assert report["events_checked"] == 3
 
 
 def test_rbac_role_endpoint(tmp_path, monkeypatch):
