@@ -47,6 +47,7 @@ from .models import (
     HealthResponse,
 )
 from .store import CaseStore, Conflict
+from .security import authenticate_bearer, require_tenant_role
 
 
 # --------------------------------------------------------------------------- #
@@ -77,20 +78,14 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _require_role(request: Request, user: dict, role: str, tenant: str) -> None:
-    """403 unless the authenticated user holds role on tenant (admin bypass)."""
-    if not cfr11_enabled():
-        return
-    compliance: Optional[CFR11Compliance] = request.app.state.cfr11
-    if compliance is None:
-        raise HTTPException(status_code=500, detail="compliance layer not configured")
-    if role == "admin":
-        allowed = compliance.has_role(user["user_id"], "admin", tenant)
-    else:
-        allowed = compliance.has_role(user["user_id"], role, tenant) or compliance.has_role(
-            user["user_id"], "admin", tenant
-        )
-    if not allowed:
-        raise HTTPException(status_code=403, detail=f"role {role} required on tenant {tenant}")
+    """Enforce tenant binding and role authorization; never bypass when CFR11 is off."""
+    require_tenant_role(
+        user,
+        role,
+        tenant,
+        compliance=request.app.state.cfr11,
+        compliance_enabled=cfr11_enabled(),
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -139,16 +134,12 @@ def create_application(store: Optional[CaseStore] = None) -> FastAPI:
     # Identity
     # ------------------------------------------------------------------ #
     async def current_user(
-        request: Request, x_user_id: Optional[str] = Header(default=None, alias="X-User-Id")
+        authorization: Optional[str] = Header(default=None, alias="Authorization")
     ) -> dict:
-        if not cfr11_enabled():
-            return {"user_id": "api-client"}
-        if not x_user_id:
-            raise HTTPException(status_code=401, detail="X-User-Id required")
-        return {"user_id": x_user_id}
+        return authenticate_bearer(authorization)
 
     def _actor(user: dict) -> str:
-        return user["user_id"] if cfr11_enabled() else "api-client"
+        return user["user_id"]
 
     # ------------------------------------------------------------------ #
     # Health
@@ -258,6 +249,11 @@ def create_application(store: Optional[CaseStore] = None) -> FastAPI:
         user: dict = Depends(current_user),
     ):
         _require_role(request, user, "approver", tenant)
+        if not cfr11_enabled():
+            raise HTTPException(
+                status_code=503,
+                detail="case approval is disabled until CFR11_ENABLE=1 and signing/encryption keys are configured",
+            )
         try:
             case = store.approve(tenant, _actor(user), str(case_id), req.expected_version)
         except KeyError:
@@ -278,6 +274,11 @@ def create_application(store: Optional[CaseStore] = None) -> FastAPI:
         user: dict = Depends(current_user),
     ):
         _require_role(request, user, "approver", tenant)
+        if not cfr11_enabled():
+            raise HTTPException(
+                status_code=503,
+                detail="draft export is disabled until CFR11_ENABLE=1 and signing/encryption keys are configured",
+            )
         try:
             result = store.export(tenant, _actor(user), str(case_id))
         except KeyError:
@@ -333,11 +334,12 @@ def create_application(store: Optional[CaseStore] = None) -> FastAPI:
         tenant: Optional[str] = Query(default=None),
         user: dict = Depends(current_user),
     ):
-        _require_role(request, user, "reader", tenant or "")
+        effective_tenant = tenant or user["tenant"]
+        _require_role(request, user, "reader", effective_tenant)
         compliance: CFR11Compliance = request.app.state.cfr11
         if compliance is None or not compliance.enabled:
             raise HTTPException(status_code=404, detail="CFR 11 audit trail not enabled")
-        return compliance.verify_chain(tenant)
+        return compliance.verify_chain(effective_tenant)
 
     # ------------------------------------------------------------------ #
     # CFR 11: electronic signatures (11.100 / 11.200)
