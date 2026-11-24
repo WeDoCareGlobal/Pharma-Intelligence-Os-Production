@@ -54,19 +54,19 @@ jobs:
       # `npm ci` requires package-lock.json to be committed — that missing lock
       # file is what failed every earlier run on this repo.
       - name: Install (frontend)
-        run: cd frontend && npm install
+        run: npm ci
 
       - name: Lint
-        run: cd frontend && npm run lint
+        run: npm run lint
 
       - name: Typecheck
-        run: cd frontend && npm run typecheck
+        run: npm run typecheck
 
       - name: Test
-        run: cd frontend && npx vitest run --passWithNoTests
+        run: npx vitest run --passWithNoTests
 
       - name: Build
-        run: cd frontend && npm run build
+        run: npm run build
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -74,13 +74,15 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python deps
-        run: pip install --break-system-packages -e ".[test]"
+        working-directory: .
+        run: pip install -e ".[test]"
 
       - name: Python tests
+        working-directory: .
         run: python -m pytest tests/ -v
 
       - name: Security audit
-        run: cd frontend && npm audit --audit-level=high || true
+        run: npm audit --audit-level=high
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -100,10 +102,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install locked dependencies
-        run: npm ci --ignore-scripts
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
       - name: Enforce high/critical vulnerability gate
         run: npm audit --audit-level=high
 

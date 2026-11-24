@@ -91,14 +91,16 @@ pip install -e ".[test]"
 
 # Configure environment
 export PHARMA_DATABASE=sqlite+aiosqlite:///./pharma.db
-export PHARMA_SERVICE_IDENTITIES='{"token1": {"tenant": "demo", "subject": "reviewer1", "role": "reviewer"}}'
+# Generate a unique random token of at least 32 characters; do not commit it.
+export PHARMA_API_TOKEN='<generate-a-random-secret-of-at-least-32-characters>'
+export PHARMA_SERVICE_IDENTITIES="{\"$PHARMA_API_TOKEN\": {\"tenant\": \"demo\", \"subject\": \"reviewer1\", \"roles\": [\"reader\", \"reviewer\"]}}"
 
 # Run API server (port 8000)
 uvicorn pharma_next.main:application --factory --host 0.0.0.0 --port 8000
 
 # Test endpoints
 curl http://localhost:8000/health
-curl -H "Authorization: Bearer token1" http://localhost:8000/v1/cases
+curl -H "Authorization: Bearer $PHARMA_API_TOKEN" "http://localhost:8000/v1/cases?tenant=demo"
 ```
 
 ### Frontend Development (React Dashboard)
