@@ -20,10 +20,10 @@ Endpoints:
   GET  /v1/cfr11/roles                 (reader)
   GET  /v1/cfr11/authorizations        (reader) — dual-authorization grants
 
-Identity is transported in headers (X-User-Id; X-User-Roles is advisory —
-authoritative roles are stored and enforced by CFR11Compliance). When
-CFR11_ENABLE=1 the middleware rejects non-HTTPS requests and stamps HSTS
-on every response (encryption in transit).
+Identity is resolved from a configured bearer token in Authorization.
+Client-supplied identity headers are never trusted. Every protected request is
+bound to the token's tenant. When CFR11_ENABLE=1, authoritative roles are
+stored and enforced by CFR11Compliance; approval/export fail closed otherwise.
 """
 
 
@@ -388,6 +388,8 @@ def create_application(store: Optional[CaseStore] = None) -> FastAPI:
     ):
         _require_role(request, user, "admin", req.tenant)
         compliance: CFR11Compliance = request.app.state.cfr11
+        if compliance is None or not compliance.enabled:
+            raise HTTPException(status_code=503, detail="CFR 11 role management is not configured")
         compliance.assign_role(req.user_id, req.role, req.tenant)
         return {"user_id": req.user_id, "role": req.role, "tenant": req.tenant}
 
@@ -420,6 +422,8 @@ def create_application(store: Optional[CaseStore] = None) -> FastAPI:
     ):
         _require_role(request, user, "reader", tenant)
         compliance: CFR11Compliance = request.app.state.cfr11
+        if compliance is None or not compliance.enabled:
+            raise HTTPException(status_code=503, detail="CFR 11 authorization records are not configured")
         return compliance.approvals(tenant, case_id, version)
 
     # ------------------------------------------------------------------ #
