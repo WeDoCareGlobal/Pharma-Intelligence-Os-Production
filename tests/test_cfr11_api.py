@@ -1,5 +1,7 @@
 """API-level tests for the CFR 11 compliance endpoints."""
 
+import json
+
 from fastapi.testclient import TestClient
 
 from pharma_next.api import create_application
@@ -11,6 +13,13 @@ import base64
 
 
 def _app(tmp_path, monkeypatch):
+    identities = {
+        "test-token-for-" + user + "-012345678901234567890123": {
+            "tenant": "t", "subject": user, "roles": ["reader"]
+        }
+        for user in ["alice", "bob", "carol", "dave", "eve"]
+    }
+    monkeypatch.setenv("PHARMA_SERVICE_IDENTITIES", json.dumps(identities))
     monkeypatch.setenv("CFR11_ENABLE", "1")
     monkeypatch.setenv("CFR11_DUAL_AUTHORIZATION", "1")
     signing_key = Ed25519PrivateKey.generate()
@@ -30,7 +39,8 @@ def _app(tmp_path, monkeypatch):
 
 
 def _headers(user):
-    return {"X-User-Id": user}
+    token = "test-token-for-" + user + "-012345678901234567890123"
+    return {"Authorization": f"Bearer {token}"}
 
 
 def test_requires_authentication(tmp_path, monkeypatch):
